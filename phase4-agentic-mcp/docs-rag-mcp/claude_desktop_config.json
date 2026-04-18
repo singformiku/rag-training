@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "docs-rag": {
+      "command": "/absolute/path/to/.venv/bin/python",
+      "args": ["/absolute/path/to/docs-rag-mcp/server.py"],
+      "cwd": "/absolute/path/to/docs-rag-mcp",
+      "env": {"PYTHONUNBUFFERED": "1"}
+    }
+  }
+}

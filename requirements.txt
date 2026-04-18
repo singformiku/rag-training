@@ -1,0 +1,43 @@
+# ===== Core LLM & Embeddings =====
+anthropic>=0.40.0
+voyageai>=0.3.2
+httpx>=0.27.0
+cohere
+
+# ===== Vector Stores =====
+chromadb>=0.5.20
+qdrant-client
+
+# ===== Text Processing / Retrieval =====
+langchain-text-splitters
+sentence-transformers
+rank-bm25
+jieba
+
+# ===== Structured Output =====
+instructor
+pydantic
+
+# ===== MCP (Model Context Protocol) =====
+mcp[cli]>=1.7.1
+rich
+
+# ===== Evaluation =====
+ragas>=0.2.14,<0.4
+langchain-anthropic
+langchain-openai
+datasets
+scikit-learn
+pandas
+pyarrow
+numpy
+
+# ===== Observability =====
+langfuse
+
+# ===== Testing =====
+pytest
+
+# ===== Utilities =====
+python-dotenv
+tqdm
