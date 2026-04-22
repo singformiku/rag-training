@@ -1,0 +1,44 @@
+
+{
+  "knowledge_base_name": "Innovate Logistics FAQ",
+  "version": "1.1",
+  "faqs": [
+    {
+      "id": "tracking_01",
+      "question": "How can I track my package?",
+      "answer": "You can track your package 24/7 using our official tracking portal at https://innovatelogistics.com/track. You will need your tracking number, which was provided in your shipping confirmation email."
+    },
+    {
+      "id": "shipping_options_01",
+      "question": "What shipping options do you offer?",
+      "answer": "Innovate Logistics offers several shipping options to meet your needs, including Standard Ground (5-7 business days), Expedited Ground (2-3 business days), and International Air Freight (typically 3-5 business days depending on destination)."
+    },
+    {
+      "id": "shipping_options_02",
+      "question": "What is the fastest shipping option for international routes like to Berlin?",
+      "answer": "For any international shipment, our International Air Freight service is the fastest and most secure option. It is the recommended choice for time-sensitive or high-value deliveries across the globe."
+    },
+    {
+      "id": "customs_01",
+      "question": "Do you handle customs for international shipments?",
+      "answer": "Yes, we offer comprehensive customs brokerage services. Our team handles all necessary documentation and ensures compliance with customs regulations to minimize delays and streamline the international shipping process."
+    },
+    {
+      "id": "insurance_01",
+      "question": "Is insurance available for my shipment?",
+      "answer": "Yes, insurance is available for all shipments and can be added during the booking process. For high-value items, we strongly recommend purchasing enhanced coverage to protect your shipment's full value."
+    },
+    {
+      "id": "high_value_01",
+      "question": "What are your policies for shipping high-value electronics?",
+      "answer": "For shipping high-value electronics, we require special handling and mandatory insurance coverage. Our International Air Freight option is recommended for these items to ensure maximum speed and security. Please follow our specific packaging guidelines to ensure insurance validity."
+    },
+    {
+      "id": "policy_01",
+      "question": "Can you guarantee my package will arrive by a specific date?",
+      "answer": "While we provide estimated delivery dates based on our shipping options, we cannot guarantee a specific arrival date due to potential unforeseen circumstances like weather events or customs processing delays. For the most up-to-date status, please use the official tracking portal."
+    }
+  ]
+}
+
+
