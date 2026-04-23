@@ -12,8 +12,9 @@ EMBED_MODEL = "voyage-3.5"
 COLLECTION = "demo_docs"
 TOP_K = 4
 
+VOYAGE_API_KEY="pa-qm1t7DmFF-fDLzPOYAEUxkr4eSldcreEKrpsPZBxiWC"
 anthropic_client = Anthropic()
-voyage_client = voyageai.Client()
+voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
 

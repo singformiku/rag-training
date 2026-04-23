@@ -1,14 +1,14 @@
 """
 Agent 核心模組
 ==============
-這是整個框架的心臟。實作了 Claude 的 Agentic Loop：
+這是整個框架的心臟。實作 Agentic Loop：
 
 ┌─────────────────────────────────────────┐
 │  User Query                             │
 └──────────────┬──────────────────────────┘
                ▼
       ┌────────────────┐
-      │  Think         │ ◄─── Extended Thinking
+      │  Think         │ ◄─── (gpt-oss-120b) reasoning_effort
       │  (Reasoning)   │
       └────────┬───────┘
                ▼
@@ -32,22 +32,23 @@ Agent 核心模組
          └─► Back to Think
 
 關鍵設計：
-1. 主迴圈由 `stop_reason` 控制：當 Claude 回傳 "tool_use" 時繼續，
-   回傳 "end_turn" 時代表任務完成
-2. 每個工具呼叫都會被記錄到 Memory，下一輪 API 呼叫會帶著完整歷史
+1. 主迴圈由 ``finish_reason`` 控制：
+   - "tool_calls" → 執行工具並進入下一輪
+   - "stop"       → 任務完成，回傳最終答案
+2. 每一輪都把新的 assistant message / tool result 寫進 Memory，
+   下一輪 API 呼叫帶著完整歷史
 3. 超過 max_iterations 時強制停止 (避免成本失控)
 4. requires_confirmation 的工具會在執行前詢問使用者
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
-import anthropic
 
-from src.config import config
+from src.config import config, settings
 from src.memory import Memory
-from src.tools.base import Tool, ToolRegistry
 from src.skills.loader import SkillLoader
-
+from src.tools.base import Tool, ToolRegistry
 
 # rich 用於漂亮的輸出，但非必要。裝不了的話退回純文字。
 try:
@@ -71,9 +72,10 @@ except ImportError:
 
 class Agent:
     """
-    一個基於 Claude 的 AI Agent。
+    基於 ``LLMService`` (OpenAI 相容 API) 的 AI Agent。
 
-    使用範例:
+    使用範例::
+
         agent = Agent(
             system_prompt="你是一個 Python 程式碼審查專家",
             tools=[ReadFileTool(), BashTool()],
@@ -88,29 +90,33 @@ class Agent:
         skills_dir: str | None = None,
         max_iterations: int | None = None,
         enable_thinking: bool | None = None,
+        reasoning_effort: str | None = None,
         confirm_callback: Callable[[str, dict], bool] | None = None,
         verbose: bool = True,
     ):
         """
-        初始化 Agent。
-
         Args:
             system_prompt: Agent 的角色設定
             tools: 可用的工具列表
             skills_dir: Skills 資料夾路徑 (會自動掃描 SKILL.md)
             max_iterations: 最大迭代次數
-            enable_thinking: 是否開啟 Extended Thinking
+            enable_thinking: 是否要求模型 reasoning (對應 gpt-oss 的 reasoning_effort)
+            reasoning_effort: 覆寫預設的推理強度 (low/medium/high)
             confirm_callback: 高風險工具的確認函式，回傳 True 代表允許執行
             verbose: 是否列印詳細執行過程
         """
+        # 延遲 import，避免 test 環境沒裝 llm deps 也能 import src.tools
+        from llm_service import llm_service
+
         config.validate()
 
-        self.client = anthropic.Anthropic(api_key=config.api_key)
-        self.model = config.model
+        self.llm = llm_service
+        self.model = settings.LLM_MODEL
         self.max_iterations = max_iterations or config.max_iterations
         self.enable_thinking = (
             enable_thinking if enable_thinking is not None else config.enable_thinking
         )
+        self.reasoning_effort = reasoning_effort or config.reasoning_effort
         self.verbose = verbose
         self.confirm_callback = confirm_callback or self._default_confirm
 
@@ -128,8 +134,10 @@ class Agent:
         # 組合 system prompt
         self.system_prompt = self._build_system_prompt(system_prompt)
 
-        # 記憶
+        # 記憶 — 以 system message 開場 (OpenAI 風格)
         self.memory = Memory()
+        if self.system_prompt:
+            self.memory.set_system_message(self.system_prompt)
 
     def _build_system_prompt(self, user_prompt: str) -> str:
         """
@@ -146,7 +154,7 @@ class Agent:
             if skills_summary:
                 parts.append(skills_summary)
 
-        # 通用指引：教 Claude 如何好好使用這個框架
+        # 通用指引：教模型如何好好使用這個框架
         parts.append(
             "## 工作準則\n"
             "- 在執行工具前，先說明你的計畫\n"
@@ -157,10 +165,7 @@ class Agent:
         return "\n\n".join(parts)
 
     def _default_confirm(self, tool_name: str, tool_input: dict) -> bool:
-        """
-        預設的確認函式：在 terminal 問使用者 y/n。
-        可替換成 GUI 彈窗、Slack 訊息等。
-        """
+        """預設的確認函式：在 terminal 問使用者 y/n。"""
         console.print(
             Panel(
                 f"[yellow]⚠️  即將執行高風險操作[/yellow]\n\n"
@@ -173,100 +178,117 @@ class Agent:
         answer = input("允許執行？(y/N): ").strip().lower()
         return answer == "y"
 
+    # ------------------------------------------------------------------
+    # 主迴圈
+    # ------------------------------------------------------------------
     def run(self, user_query: str) -> str:
         """
-        執行一個完整的任務。
-
-        這是主入口。整個 Agentic Loop 都在這裡展開。
+        執行一個完整的任務 —— 整個 Agentic Loop 都在這裡展開。
         """
         if self.verbose:
             console.print(Panel(user_query, title="👤 User Query", border_style="blue"))
 
         self.memory.add_user_message(user_query)
 
+        final_text = ""
+
         for iteration in range(self.max_iterations):
             if self.verbose:
                 console.print(f"\n[dim]── Iteration {iteration + 1} ──[/dim]")
 
-            # 1. 呼叫 Claude API
-            response = self._call_claude()
+            # 1. 呼叫 LLM
+            completion = self._call_llm()
+            choice = completion.choices[0]
+            message = choice.message
+            finish_reason = choice.finish_reason
 
-            # 2. 把 Claude 的回應存進記憶
-            self.memory.add_assistant_message(response.content)
+            # 2. 存回 memory (assistant message，含可能的 tool_calls)
+            self.memory.add_assistant_message(message)
 
-            # 3. 印出 Claude 的思考和回應
-            self._display_response(response)
+            # 3. 顯示 reasoning + content
+            self._display_response(message)
 
-            # 4. 根據 stop_reason 決定下一步
-            if response.stop_reason == "end_turn":
-                # 任務完成，回傳最終答案
-                return self._extract_text(response.content)
-
-            if response.stop_reason == "tool_use":
-                # 需要執行工具
-                self._handle_tool_calls(response.content)
-                # 接著進入下一輪迴圈
+            # 4. 根據 finish_reason 決定下一步
+            if finish_reason == "tool_calls" or (message.tool_calls and finish_reason != "stop"):
+                # OpenAI 有時會回 "stop" 但仍有 tool_calls (罕見)；以 tool_calls 為準
+                self._handle_tool_calls(message.tool_calls or [])
                 continue
 
-            # 其他 stop_reason (max_tokens, stop_sequence 等)
+            if finish_reason == "stop":
+                final_text = message.content or ""
+                return final_text
+
+            # length / content_filter / 其他
             if self.verbose:
-                console.print(f"[yellow]⚠️  停止原因：{response.stop_reason}[/yellow]")
-            break
+                console.print(
+                    f"[yellow]⚠️  停止原因：{finish_reason}[/yellow]"
+                )
+            final_text = message.content or ""
+            return final_text
 
         # 超過最大迭代次數
         if self.verbose:
             console.print(
                 f"[red]⚠️  已達最大迭代次數 ({self.max_iterations})，強制停止[/red]"
             )
-        return "任務未完成：超過最大迭代次數"
+        return final_text or "任務未完成：超過最大迭代次數"
 
-    def _call_claude(self) -> Any:
-        """呼叫 Anthropic API。"""
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": 4096,
-            "system": self.system_prompt,
-            "messages": self.memory.get_messages(),
-        }
+    # ------------------------------------------------------------------
+    # LLM 呼叫 + 工具處理
+    # ------------------------------------------------------------------
+    def _call_llm(self) -> Any:
+        """呼叫底層 LLMService.complete_with_tools。"""
+        tools_payload = (
+            self.tool_registry.to_api_format()
+            if len(self.tool_registry) > 0
+            else None
+        )
 
-        # 有工具才傳 tools 參數
-        if len(self.tool_registry) > 0:
-            kwargs["tools"] = self.tool_registry.to_api_format()
+        return self.llm.complete_with_tools(
+            messages=self.memory.get_messages(),
+            tools=tools_payload,
+            tool_choice="auto" if tools_payload else None,
+            reasoning_effort=self.reasoning_effort if self.enable_thinking else None,
+        )
 
-        # Extended Thinking (使用 Claude 的內建推理機制)
-        # 注意：此功能要求特定模型版本，且會增加 latency 和 cost
-        if self.enable_thinking:
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": config.thinking_budget,
-            }
+    def _handle_tool_calls(self, tool_calls: list) -> None:
+        """處理模型回應中的所有 tool_calls。"""
+        for call in tool_calls:
+            # OpenAI 格式：call.id / call.function.name / call.function.arguments (JSON str)
+            tool_call_id = call.id
+            tool_name = call.function.name
+            raw_args = call.function.arguments or "{}"
 
-        return self.client.messages.create(**kwargs)
-
-    def _handle_tool_calls(self, content_blocks: list) -> None:
-        """處理 Claude 回應中的所有 tool_use block。"""
-        for block in content_blocks:
-            if block.type != "tool_use":
+            try:
+                tool_input = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except json.JSONDecodeError as e:
+                self.memory.add_tool_result(
+                    tool_call_id,
+                    f"工具參數 JSON 解析失敗：{e}；原始字串：{raw_args!r}",
+                    is_error=True,
+                )
                 continue
-
-            tool_name = block.name
-            tool_input = block.input
-            tool_use_id = block.id
 
             tool = self.tool_registry.get(tool_name)
             if tool is None:
-                result = f"錯誤：找不到工具 '{tool_name}'"
-                self.memory.add_tool_result(tool_use_id, result, is_error=True)
+                self.memory.add_tool_result(
+                    tool_call_id,
+                    f"錯誤：找不到工具 '{tool_name}'",
+                    is_error=True,
+                )
                 continue
 
             # 高風險工具需要確認
             if tool.requires_confirmation:
                 if not self.confirm_callback(tool_name, tool_input):
-                    result = "❌ 使用者拒絕執行此操作"
-                    self.memory.add_tool_result(tool_use_id, result, is_error=True)
+                    self.memory.add_tool_result(
+                        tool_call_id,
+                        "❌ 使用者拒絕執行此操作",
+                        is_error=True,
+                    )
                     continue
 
-            # 執行工具
+            # 執行
             if self.verbose:
                 console.print(
                     f"🔧 [cyan]執行工具:[/cyan] [bold]{tool_name}[/bold] "
@@ -276,7 +298,7 @@ class Agent:
             try:
                 result = tool.execute(**tool_input)
                 is_error = False
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 result = f"工具執行錯誤：{e}"
                 is_error = True
 
@@ -284,33 +306,40 @@ class Agent:
                 preview = result[:200] + ("..." if len(result) > 200 else "")
                 console.print(f"[dim]📤 結果：{preview}[/dim]")
 
-            self.memory.add_tool_result(tool_use_id, result, is_error=is_error)
+            self.memory.add_tool_result(tool_call_id, result, is_error=is_error)
 
-    def _display_response(self, response: Any) -> None:
-        """把 Claude 的回應 (含 thinking 和 text) 印出來。"""
+    # ------------------------------------------------------------------
+    # 顯示
+    # ------------------------------------------------------------------
+    def _display_response(self, message: Any) -> None:
+        """把模型回應 (reasoning + content + tool_calls) 印出來。"""
         if not self.verbose:
             return
 
-        for block in response.content:
-            if block.type == "thinking":
+        # gpt-oss / 部分 OpenAI-compatible server 會附加 reasoning_content
+        reasoning = getattr(message, "reasoning_content", None) or getattr(
+            message, "reasoning", None
+        )
+        if reasoning:
+            console.print(
+                Panel(str(reasoning), title="🧠 Reasoning", border_style="magenta")
+            )
+
+        if message.content:
+            console.print(
+                Panel(message.content, title="🤖 Assistant", border_style="green")
+            )
+
+        if message.tool_calls:
+            for call in message.tool_calls:
                 console.print(
-                    Panel(
-                        block.thinking,
-                        title="🧠 Extended Thinking",
-                        border_style="magenta",
-                    )
-                )
-            elif block.type == "text":
-                console.print(
-                    Panel(block.text, title="🤖 Claude", border_style="green")
+                    f"[cyan]↪ tool_call:[/cyan] [bold]{call.function.name}[/bold] "
+                    f"[dim]{call.function.arguments}[/dim]"
                 )
 
-    @staticmethod
-    def _extract_text(content_blocks: list) -> str:
-        """從 content blocks 中抽出最後的文字回應。"""
-        texts = [b.text for b in content_blocks if b.type == "text"]
-        return "\n".join(texts)
-
+    # ------------------------------------------------------------------
+    # Utility
+    # ------------------------------------------------------------------
     def reset(self) -> None:
-        """清空對話記憶，重新開始。"""
-        self.memory.clear()
+        """清空對話記憶，保留 system message。"""
+        self.memory.clear(keep_system=True)

@@ -1,0 +1,1 @@
+JWTs are self‑contained tokens that carry user claims and are usually stored client‑side (e.g., in localStorage) and sent with each request, while session cookies store only a random session ID on the client; the server keeps the actual session data and validates the ID on every request.

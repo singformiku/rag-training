@@ -2,14 +2,14 @@
 Tool 基礎類別
 ==============
 定義工具的統一介面。所有的工具都必須：
-1. 有 name, description, input_schema (供 Claude 理解怎麼呼叫)
+1. 有 name, description, input_schema (供模型理解怎麼呼叫)
 2. 實作 execute() 方法 (實際執行)
 
-Claude 如何知道要用這個工具？
-- API 呼叫時我們會把 tools 列表送過去
-- Claude 看到 description 判斷是否適合用
-- Claude 生成符合 input_schema 的參數
-- 我們收到 tool_use block 後呼叫 execute()
+模型如何知道要用這個工具？
+- API 呼叫時我們會把 tools 列表 (OpenAI function-calling 格式) 送過去
+- 模型看到 description 判斷是否適合用
+- 模型生成符合 parameters (= input_schema) 的參數
+- 我們收到 ``tool_calls`` 後呼叫 execute()
 """
 from abc import ABC, abstractmethod
 from typing import Any
@@ -32,32 +32,39 @@ class Tool(ABC):
         實際執行工具。
 
         Args:
-            **kwargs: 由 Claude 生成的參數，結構符合 input_schema
+            **kwargs: 由模型生成的參數，結構符合 input_schema
 
         Returns:
-            str: 執行結果。Claude 會把這個字串當成 observation。
+            str: 執行結果。會作為 ``role: tool`` 訊息送回模型。
         """
         raise NotImplementedError
 
     def to_api_format(self) -> dict[str, Any]:
         """
-        轉成 Anthropic API 需要的格式。
+        轉成 OpenAI function-calling 格式。
 
-        格式範例：
-        {
-            "name": "get_weather",
-            "description": "Get current weather",
-            "input_schema": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"]
+        格式範例::
+
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"]
+                    }
+                }
             }
-        }
         """
         return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.input_schema,
+            },
         }
 
     def __repr__(self) -> str:

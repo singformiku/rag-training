@@ -1,4 +1,20 @@
-anthropic>=0.40.0
+# ===== Internal PyPI (for aia-auth-client) =====
+--index-url https://artifacts.dell.com/artifactory/api/pypi/python/simple
+--extra-index-url https://artifacts.dell.com/artifactory/api/pypi/agtsdk-1007569-pypi-prd-local/simple
+--trusted-host artifacts.dell.com
+
+# ===== Auth =====
+aia-auth-client==0.0.4
+
+# ===== LLM client (OpenAI-compatible endpoint) =====
+openai>=1.50.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0
+
+# ===== HTTP / Config =====
+httpx>=0.27.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
+
+# ===== CLI output =====
 rich>=13.0.0

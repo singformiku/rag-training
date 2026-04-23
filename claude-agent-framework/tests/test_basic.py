@@ -1,7 +1,7 @@
 """
 基礎單元測試
 ============
-這些測試不需要 API Key，只測試工具和 skill loader 的邏輯。
+這些測試不需要 API Key，只測試工具、memory、skill loader 的邏輯。
 
 執行方式:
     python -m pytest tests/
@@ -68,7 +68,13 @@ def test_tool_registry():
 
     api_format = reg.to_api_format()
     assert len(api_format) == 2
-    assert all("name" in t and "description" in t for t in api_format)
+
+    # OpenAI function-calling 格式
+    for t in api_format:
+        assert t["type"] == "function"
+        assert "name" in t["function"]
+        assert "description" in t["function"]
+        assert "parameters" in t["function"]
 
     print("✅ test_tool_registry")
 
@@ -101,20 +107,68 @@ def test_skill_loader():
 
 def test_memory():
     mem = Memory()
+    mem.set_system_message("you are a helpful assistant")
     mem.add_user_message("hello")
     mem.add_assistant_message("hi")
-    mem.add_tool_result("tool_123", "result_data")
+    mem.add_tool_result("call_123", "result_data")
 
     messages = mem.get_messages()
-    assert len(messages) == 3
-    assert messages[0]["role"] == "user"
-    assert messages[1]["role"] == "assistant"
-    assert messages[2]["content"][0]["type"] == "tool_result"
+    # system + user + assistant + tool = 4
+    assert len(messages) == 4
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert messages[2]["role"] == "assistant"
+    assert messages[2]["content"] == "hi"
+    assert messages[3]["role"] == "tool"
+    assert messages[3]["tool_call_id"] == "call_123"
+    assert messages[3]["content"] == "result_data"
 
+    # clear(keep_system=True)
+    mem.clear(keep_system=True)
+    remaining = mem.get_messages()
+    assert len(remaining) == 1
+    assert remaining[0]["role"] == "system"
+
+    # Full clear
     mem.clear()
     assert len(mem) == 0
 
     print("✅ test_memory")
+
+
+def test_memory_assistant_with_tool_calls():
+    """模擬 OpenAI SDK 的 message-like 物件被存入 memory。"""
+    class _Fn:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class _TC:
+        def __init__(self, id_, name, arguments):
+            self.id = id_
+            self.function = _Fn(name, arguments)
+
+    class _Msg:
+        def __init__(self, content, tool_calls):
+            self.content = content
+            self.tool_calls = tool_calls
+
+    fake = _Msg(None, [_TC("call_abc", "calculator", '{"expression":"1+1"}')])
+
+    mem = Memory()
+    mem.add_assistant_message(fake)
+
+    msgs = mem.get_messages()
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert m["role"] == "assistant"
+    assert m["content"] is None
+    assert m["tool_calls"][0]["id"] == "call_abc"
+    assert m["tool_calls"][0]["type"] == "function"
+    assert m["tool_calls"][0]["function"]["name"] == "calculator"
+    assert m["tool_calls"][0]["function"]["arguments"] == '{"expression":"1+1"}'
+
+    print("✅ test_memory_assistant_with_tool_calls")
 
 
 if __name__ == "__main__":
@@ -123,4 +177,5 @@ if __name__ == "__main__":
     test_tool_registry()
     test_skill_loader()
     test_memory()
+    test_memory_assistant_with_tool_calls()
     print("\n🎉 所有測試通過")

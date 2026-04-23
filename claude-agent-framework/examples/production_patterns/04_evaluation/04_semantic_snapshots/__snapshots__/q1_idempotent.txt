@@ -1,0 +1,1 @@
+In computing, an operation is **idempotent** when performing it once or multiple times yields the same result and leaves the system state unchanged after the first execution.
